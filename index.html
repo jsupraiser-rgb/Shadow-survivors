@@ -2,164 +2,209 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
   <title>Shadow Survivors</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      touch-action: none;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; user-select: none; }
     body {
-      background: #0a0a0f;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #050508;
+      color: #ddd;
+      font-family: system-ui, -apple-system, sans-serif;
       overflow: hidden;
       height: 100vh;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
     }
     #game-container {
       position: relative;
       width: 100%;
-      max-width: 900px;
+      max-width: 960px;
       height: 100vh;
-      max-height: 600px;
-      background: #111118;
-      border: 2px solid #2a2a3a;
-      border-radius: 8px;
+      max-height: 540px;
+      background: #0a0a12;
+      border: 2px solid #222;
       overflow: hidden;
     }
     canvas {
       display: block;
       width: 100%;
       height: 100%;
-      background: #0d0d14;
+      background: #0a0a12;
     }
     #ui {
       position: absolute;
-      top: 10px;
-      left: 10px;
-      right: 10px;
+      top: 8px;
+      left: 8px;
+      right: 8px;
       display: flex;
       justify-content: space-between;
+      gap: 6px;
       pointer-events: none;
-      z-index: 10;
+      z-index: 20;
+      flex-wrap: wrap;
     }
     .stat {
-      background: rgba(0,0,0,0.6);
-      padding: 6px 12px;
+      background: rgba(0,0,0,0.7);
+      padding: 5px 10px;
       border-radius: 6px;
-      font-size: 14px;
+      font-size: 13px;
       border: 1px solid #333;
+      white-space: nowrap;
+    }
+    #combo-display {
+      position: absolute;
+      top: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 22px;
+      font-weight: bold;
+      color: #c9a0ff;
+      text-shadow: 0 0 10px #a070ff;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+      z-index: 25;
     }
     #controls {
       position: absolute;
-      bottom: 20px;
-      width: 100%;
+      bottom: 12px;
+      left: 0;
+      right: 0;
       display: flex;
       justify-content: space-between;
-      padding: 0 20px;
+      padding: 0 12px;
       pointer-events: none;
+      z-index: 20;
     }
     .btn {
-      width: 70px;
-      height: 70px;
-      background: rgba(40,40,60,0.7);
+      width: 64px;
+      height: 64px;
+      background: rgba(30,30,50,0.75);
       border: 2px solid #555;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 24px;
+      font-size: 22px;
       color: #ccc;
       pointer-events: auto;
-      user-select: none;
     }
-    .btn:active {
-      background: rgba(80,80,120,0.9);
+    .btn:active, .btn.active {
+      background: rgba(90,70,140,0.9);
+      border-color: #a070ff;
     }
     #joystick-area {
-      width: 120px;
-      height: 120px;
+      width: 110px;
+      height: 110px;
       position: relative;
       pointer-events: auto;
     }
     #joystick-base {
-      width: 100px;
-      height: 100px;
-      background: rgba(40,40,60,0.5);
+      width: 90px;
+      height: 90px;
+      background: rgba(30,30,50,0.5);
       border: 2px solid #444;
       border-radius: 50%;
       position: absolute;
       bottom: 0;
-      left: 0;
+      left: 10px;
     }
     #joystick-knob {
-      width: 40px;
-      height: 40px;
-      background: rgba(100,100,140,0.8);
+      width: 38px;
+      height: 38px;
+      background: rgba(120,100,180,0.85);
       border-radius: 50%;
       position: absolute;
-      top: 30px;
-      left: 30px;
+      top: 26px;
+      left: 26px;
+    }
+    #right-btns {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
     }
     #message {
       position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(0,0,0,0.85);
-      padding: 20px 30px;
-      border-radius: 10px;
+      inset: 0;
+      background: rgba(0,0,0,0.88);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
       text-align: center;
-      display: none;
-      z-index: 20;
-      border: 1px solid #444;
+      padding: 20px;
     }
-    #message h2 {
-      margin-bottom: 10px;
-      color: #c0a0ff;
+    #message h1 {
+      color: #c9a0ff;
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    #message p {
+      max-width: 320px;
+      line-height: 1.4;
+      margin-bottom: 6px;
+      font-size: 14px;
     }
     #message button {
-      margin-top: 15px;
-      padding: 10px 25px;
-      background: #4a3a8a;
+      margin-top: 18px;
+      padding: 12px 28px;
+      background: #5a3a9a;
       border: none;
       color: white;
-      border-radius: 6px;
+      border-radius: 8px;
       font-size: 16px;
-      cursor: pointer;
+      font-weight: 600;
+    }
+    #level-name {
+      position: absolute;
+      top: 48px;
+      left: 12px;
+      font-size: 13px;
+      color: #aaa;
+      pointer-events: none;
+      z-index: 20;
     }
   </style>
 </head>
 <body>
   <div id="game-container">
     <canvas id="game"></canvas>
+
     <div id="ui">
       <div class="stat">❤️ <span id="hp">100</span></div>
       <div class="stat">💀 <span id="kills">0</span></div>
       <div class="stat">✨ <span id="souls">0</span></div>
-      <div class="stat">⏱️ <span id="time">0</span>s</div>
+      <div class="stat">⚔️ <span id="weapon">Sword</span></div>
     </div>
+
+    <div id="level-name">Level 1 – Shadow Gate</div>
+    <div id="combo-display">3-HIT COMBO!</div>
+
     <div id="controls">
       <div id="joystick-area">
         <div id="joystick-base">
           <div id="joystick-knob"></div>
         </div>
       </div>
-      <div style="display:flex; gap:15px;">
+      <div id="right-btns">
+        <div class="btn" id="jump-btn">⬆</div>
         <div class="btn" id="attack-btn">⚔️</div>
-        <div class="btn" id="dash-btn">💨</div>
+        <div class="btn" id="special-btn">💥</div>
       </div>
     </div>
+
     <div id="message">
-      <h2>Shadow Survivors</h2>
-      <p>Survive the dark. Collect souls. Unlock power.</p>
-      <button id="start-btn">Start</button>
+      <h1>Shadow Survivors</h1>
+      <p>Side-scrolling dark action</p>
+      <p>Sword combos • Guns • Boss duels</p>
+      <p style="margin-top:12px;font-size:13px;color:#aaa">
+        Move with joystick<br>
+        ⚔️ Attack & build combos<br>
+        ⬆ Jump • 💥 Special
+      </p>
+      <button id="start-btn">Start Game</button>
     </div>
   </div>
 
