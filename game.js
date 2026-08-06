@@ -28,7 +28,9 @@ const player = {
   vx: 0, vy: 0,
   speed: 4.2,
   jumpForce: -11.5,
+  doubleJumpForce: -10.2,
   onGround: false,
+  jumpsLeft: 2,          // allows double jump
   facing: 1,
   hp: 100, maxHp: 100,
   invuln: 0,
@@ -43,6 +45,24 @@ const player = {
 // ---------- COMBO SYSTEM ----------
 const COMBO_WINDOW = 50;
 
+function updateComboUI() {
+  const counter = document.getElementById('combo-counter');
+  const num = document.getElementById('combo-num');
+  const multEl = document.getElementById('combo-mult');
+  if (!counter || !num) return;
+  if (player.comboCount >= 2) {
+    counter.style.display = 'block';
+    num.textContent = player.comboCount;
+    const m = getComboMultiplier();
+    if (multEl) {
+      multEl.textContent = m > 1 ? `x${m}` : '';
+    }
+  } else {
+    counter.style.display = 'none';
+    if (multEl) multEl.textContent = '';
+  }
+}
+
 function registerAttack() {
   const now = performance.now();
   if (now - player.lastAttackTime > 700) {
@@ -54,28 +74,47 @@ function registerAttack() {
   player.attacking = true;
   player.attackTimer = 18;
 
+  updateComboUI();
+
   const comboEl = document.getElementById('combo-display');
   if (player.comboCount === 3) {
     comboEl.textContent = '3-HIT COMBO!';
     comboEl.style.opacity = 1;
+    setTimeout(() => { comboEl.style.opacity = 0; }, 800);
   } else if (player.comboCount === 5) {
     comboEl.textContent = '5-HIT COMBO!';
     comboEl.style.opacity = 1;
+    setTimeout(() => { comboEl.style.opacity = 0; }, 800);
   } else if (player.comboCount >= 7) {
     comboEl.textContent = '7-HIT SPECIAL!!!';
     comboEl.style.opacity = 1;
     player.comboCount = 7;
+    setTimeout(() => { comboEl.style.opacity = 0; }, 900);
   }
-  setTimeout(() => { comboEl.style.opacity = 0; }, 800);
+}
+
+function getComboMultiplier() {
+  // Multiplier grows with combo count
+  if (player.comboCount >= 7) return 2.5;
+  if (player.comboCount >= 5) return 1.8;
+  if (player.comboCount >= 3) return 1.4;
+  if (player.comboCount >= 2) return 1.15;
+  return 1.0;
 }
 
 function getAttackDamage() {
-  if (player.weapon === 'gun') return 38;
-  if (player.weapon === 'heavy') return 48;
-  if (player.comboCount >= 7) return 60;
-  if (player.comboCount >= 5) return 34;
-  if (player.comboCount >= 3) return 24;
-  return 15;
+  let base = 15;
+  if (player.weapon === 'gun') base = 36;
+  else if (player.weapon === 'heavy') base = 46;
+
+  // Apply combo multiplier
+  const dmg = Math.round(base * getComboMultiplier());
+  return dmg;
+}
+
+function getSoulReward(base) {
+  // Higher combos give more souls
+  return Math.round(base * getComboMultiplier());
 }
 
 // ---------- 5 LEVELS ----------
@@ -261,10 +300,22 @@ function trySpecial() {
   }
 }
 function tryJump() {
+  // Can jump if we still have jumps left
+  if (player.jumpsLeft <= 0) return;
+
   if (player.onGround) {
+    // First jump from ground
     player.vy = player.jumpForce;
-    player.onGround = false;
+    player.jumpsLeft = 1;          // leave 1 for the air jump
+    spawnWeaponParticles(player.x + player.w/2, player.y + player.h, 'jump', 6);
+  } else {
+    // Double jump in air
+    player.vy = player.doubleJumpForce;
+    player.jumpsLeft = 0;          // no more jumps
+    spawnWeaponParticles(player.x + player.w/2, player.y + player.h, 'jump', 8);
+    spawnWeaponParticles(player.x + player.w/2, player.y + player.h/2, 'combo', 5);
   }
+  player.onGround = false;
 }
 
 document.getElementById('attack-btn').addEventListener('touchstart', e => { e.preventDefault(); tryAttack(); });
@@ -288,6 +339,7 @@ function loadLevel(idx) {
   player.x = 60;
   player.y = 300;
   player.vx = player.vy = 0;
+  player.jumpsLeft = 2;
   player.hp = Math.min(player.hp + 20, player.maxHp);
   cameraX = 0;
 
@@ -318,15 +370,63 @@ function loadLevel(idx) {
     player.weapon === 'gun' ? 'Shadow Gun' : 'Heavy Cleaver';
 }
 
-function spawnParticles(x, y, color, n=8) {
-  for (let i=0; i<n; i++) {
-    particles.push({
-      x, y,
-      vx: (Math.random()-0.5)*7,
-      vy: (Math.random()-0.5)*7,
-      life: 18 + Math.random()*14,
-      color
-    });
+// Weapon-themed colors (will also support heroes later)
+function getWeaponColors() {
+  switch (player.weapon) {
+    case 'gun':
+      return { hit:'#66ccff', slash:'#aaddff', death:'#3399ff', combo:'#88eeff', jump:'#5577aa', special:'#00ccff' };
+    case 'heavy':
+      return { hit:'#ff8844', slash:'#ffaa66', death:'#cc4400', combo:'#ffcc44', jump:'#885533', special:'#ff6622' };
+    default: // sword
+      return { hit:'#c9a0ff', slash:'#e0d0ff', death:'#a070ff', combo:'#ffcc66', jump:'#8888aa', special:'#ff66ff' };
+  }
+}
+
+function spawnWeaponParticles(x, y, type, n) {
+  const colors = getWeaponColors();
+  const color = colors[type] || colors.hit;
+  const count = n || (type === 'death' ? 16 : type === 'combo' ? 10 : 7);
+  spawnParticles(x, y, color, count, type);
+}
+
+function spawnParticles(x, y, color, n=8, type='normal') {
+  for (let i = 0; i < n; i++) {
+    let vx, vy, size, life, gravity = 0;
+
+    if (type === 'hit') {
+      vx = (Math.random() - 0.5) * 10;
+      vy = (Math.random() - 0.5) * 10;
+      size = 3 + Math.random() * 4;
+      life = 12 + Math.random() * 12;
+    } else if (type === 'death') {
+      vx = (Math.random() - 0.5) * 12;
+      vy = (Math.random() - 0.8) * 10;
+      size = 4 + Math.random() * 5;
+      life = 20 + Math.random() * 18;
+      gravity = 0.15;
+    } else if (type === 'jump') {
+      vx = (Math.random() - 0.5) * 4;
+      vy = Math.random() * 2 + 1;
+      size = 2 + Math.random() * 3;
+      life = 10 + Math.random() * 8;
+    } else if (type === 'combo') {
+      vx = (Math.random() - 0.5) * 8;
+      vy = (Math.random() - 0.5) * 8 - 2;
+      size = 3 + Math.random() * 5;
+      life = 16 + Math.random() * 14;
+    } else if (type === 'slash') {
+      vx = (Math.random() - 0.5) * 6 + (player.facing * 4);
+      vy = (Math.random() - 0.5) * 5;
+      size = 2 + Math.random() * 3;
+      life = 8 + Math.random() * 8;
+    } else {
+      vx = (Math.random() - 0.5) * 7;
+      vy = (Math.random() - 0.5) * 7;
+      size = 3 + Math.random() * 3;
+      life = 15 + Math.random() * 12;
+    }
+
+    particles.push({ x, y, vx, vy, life, maxLife: life, color, size, gravity });
   }
 }
 
@@ -346,9 +446,14 @@ function update() {
     player.vx *= 0.75;
   }
 
-  if ((keys['w'] || keys['arrowup'] || keys[' ']) && player.onGround) {
-    player.vy = player.jumpForce;
-    player.onGround = false;
+  // Keyboard jump (edge-triggered so holding doesn't spam)
+  if (keys['w'] || keys['arrowup'] || keys[' ']) {
+    if (!player._jumpHeld) {
+      tryJump();
+      player._jumpHeld = true;
+    }
+  } else {
+    player._jumpHeld = false;
   }
 
   player.vy += 0.55;
@@ -357,6 +462,7 @@ function update() {
   player.x += player.vx;
   player.y += player.vy;
 
+  // Ground collision
   player.onGround = false;
   for (const p of platforms) {
     if (player.x + player.w > p.x && player.x < p.x + p.w &&
@@ -365,6 +471,7 @@ function update() {
       player.y = p.y - player.h;
       player.vy = 0;
       player.onGround = true;
+      player.jumpsLeft = 2;   // fully restore jumps on landing
     }
   }
 
@@ -380,7 +487,10 @@ function update() {
   if (player.attackTimer > 0) player.attackTimer--;
   if (player.comboTimer > 0) {
     player.comboTimer--;
-    if (player.comboTimer <= 0) player.comboCount = 0;
+    if (player.comboTimer <= 0) {
+      player.comboCount = 0;
+      updateComboUI();
+    }
   }
   if (player.invuln > 0) player.invuln--;
 
@@ -410,12 +520,17 @@ function update() {
       if (sx < e.x + e.w && sx + 48 > e.x &&
           player.y < e.y + e.h && player.y + player.h > e.y) {
         e.hp -= getAttackDamage();
-        spawnParticles(e.x + e.w/2, e.y + e.h/2, '#c9a0ff');
+        spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'hit', 6);
+        spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'slash', 4);
         if (e.hp <= 0) {
           e.dead = true;
           kills++;
-          souls += e.type === 'beast' ? 9 : 4;
-          spawnParticles(e.x + e.w/2, e.y + e.h/2, '#a070ff', 14);
+          const baseSouls = e.type === 'beast' ? 9 : 4;
+          souls += getSoulReward(baseSouls);
+          spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'death', 16);
+          if (player.comboCount >= 5) {
+            spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'combo', 10);
+          }
           document.getElementById('kills').textContent = kills;
           document.getElementById('souls').textContent = souls;
         }
@@ -427,7 +542,7 @@ function update() {
         player.y < e.y + e.h && player.y + player.h > e.y) {
       player.hp -= 10;
       player.invuln = 35;
-      spawnParticles(player.x + 14, player.y + 20, '#ff5555');
+      spawnParticles(player.x + 14, player.y + 20, '#ff5555', 10, 'hit');
       if (player.hp <= 0) return gameOver();
     }
   }
@@ -449,7 +564,8 @@ function update() {
       if (sx < boss.x + boss.w && sx + 48 > boss.x &&
           player.y < boss.y + boss.h && player.y + player.h > boss.y) {
         boss.hp -= getAttackDamage();
-        spawnParticles(boss.x + boss.w/2, boss.y + 30, '#ff66aa', 10);
+        spawnWeaponParticles(boss.x + boss.w/2, boss.y + 30, 'hit', 12);
+        spawnWeaponParticles(boss.x + boss.w/2, boss.y + 30, 'slash', 6);
       }
     }
 
@@ -462,9 +578,10 @@ function update() {
     }
 
     if (boss.hp <= 0) {
-      souls += 60;
+      souls += getSoulReward(60);
       kills += 1;
-      spawnParticles(boss.x + 25, boss.y + 30, '#ffaa00', 28);
+      spawnWeaponParticles(boss.x + 25, boss.y + 30, 'death', 30);
+      spawnWeaponParticles(boss.x + 25, boss.y + 30, 'combo', 15);
       document.getElementById('souls').textContent = souls;
     }
   }
@@ -478,7 +595,7 @@ function update() {
       if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
         e.hp -= pr.dmg;
         pr.life = 0;
-        spawnParticles(e.x, e.y, '#88ccff');
+        spawnWeaponParticles(e.x, e.y, 'hit', 6);
       }
     }
     if (boss && boss.hp > 0 &&
@@ -492,7 +609,10 @@ function update() {
 
   for (let i = particles.length-1; i >= 0; i--) {
     const p = particles[i];
-    p.x += p.vx; p.y += p.vy; p.life--;
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.gravity) p.vy += p.gravity;
+    p.life--;
     if (p.life <= 0) particles.splice(i, 1);
   }
 
@@ -588,9 +708,13 @@ function draw() {
 
   // Particles
   particles.forEach(p => {
-    ctx.globalAlpha = p.life / 25;
+    const alpha = Math.max(0, p.life / (p.maxLife || 25));
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = p.color;
-    ctx.fillRect(p.x, p.y, 4, 4);
+    const s = p.size || 4;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, s * alpha, 0, Math.PI * 2);
+    ctx.fill();
   });
   ctx.globalAlpha = 1;
 
@@ -613,6 +737,7 @@ function startGame() {
   player.comboCount = 0;
   document.getElementById('kills').textContent = 0;
   document.getElementById('souls').textContent = 0;
+  updateComboUI();
   loadLevel(0);
 }
 
