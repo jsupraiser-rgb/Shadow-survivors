@@ -1,7 +1,6 @@
 // =====================================================
-// Shadow Survivors - Full Side-Scroller
-// Swordigo + Zelda + Vampire Survivors + Dead Cells hybrid
-// 5 Levels • 2 Bosses • 3/5/7 Hit Combos
+// Shadow Survivors - Level 1: Dust of Champions
+// Kael bare-hand combat + Void Leeches
 // =====================================================
 
 const canvas = document.getElementById('game');
@@ -15,35 +14,49 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// ---------- GAME STATE ----------
+// ---------- STATE ----------
 let gameRunning = false;
-let currentLevel = 0;
 let kills = 0;
 let souls = 0;
 let cameraX = 0;
+let levelComplete = false;
 
-// ---------- PLAYER ----------
+// ---------- PLAYER (Kael) ----------
 const player = {
-  x: 80, y: 0, w: 28, h: 42,
+  x: 120, y: 0, w: 30, h: 44,
   vx: 0, vy: 0,
-  speed: 4.2,
-  jumpForce: -11.5,
-  doubleJumpForce: -10.2,
+  speed: 4.4,
+  jumpForce: -11.8,
+  doubleJumpForce: -10.5,
   onGround: false,
-  jumpsLeft: 2,          // allows double jump
+  jumpsLeft: 2,
   facing: 1,
   hp: 100, maxHp: 100,
   invuln: 0,
+  // Combat
   attacking: false,
   attackTimer: 0,
+  attackType: 0,       // 1=Jab, 2=Cross, 3=SpinKick, 4=Heavy
   comboCount: 0,
   comboTimer: 0,
   lastAttackTime: 0,
-  weapon: 'sword'
+  _jumpHeld: false
 };
 
-// ---------- COMBO SYSTEM ----------
-const COMBO_WINDOW = 50;
+// ---------- COMBO DATA (from design) ----------
+const COMBO_WINDOW = 55;
+const ATTACKS = {
+  jab:      { damage: 8,  startup: 4,  active: 3,  recovery: 8,  hitstun: 12, range: 38, knockback: 2.2 },
+  cross:    { damage: 14, startup: 6,  active: 4,  recovery: 12, hitstun: 16, range: 46, knockback: 4.5 },
+  spinKick: { damage: 22, startup: 8,  active: 5,  recovery: 18, hitstun: 22, range: 54, knockback: 7.0 },
+  heavy:    { damage: 26, startup: 14, active: 5,  recovery: 22, hitstun: 18, range: 48, knockback: 8.5 }
+};
+
+function getComboMultiplier() {
+  if (player.comboCount >= 3) return 1.35;
+  if (player.comboCount >= 2) return 1.15;
+  return 1.0;
+}
 
 function updateComboUI() {
   const counter = document.getElementById('combo-counter');
@@ -54,190 +67,172 @@ function updateComboUI() {
     counter.style.display = 'block';
     num.textContent = player.comboCount;
     const m = getComboMultiplier();
-    if (multEl) {
-      multEl.textContent = m > 1 ? `x${m}` : '';
-    }
+    if (multEl) multEl.textContent = m > 1 ? `x${m.toFixed(2)}` : '';
   } else {
     counter.style.display = 'none';
     if (multEl) multEl.textContent = '';
   }
 }
 
-function registerAttack() {
+function registerAttack(type) {
   const now = performance.now();
-  if (now - player.lastAttackTime > 700) {
-    player.comboCount = 0;
-  }
+  if (now - player.lastAttackTime > 750) player.comboCount = 0;
+
   player.lastAttackTime = now;
-  player.comboCount++;
-  player.comboTimer = COMBO_WINDOW;
   player.attacking = true;
-  player.attackTimer = 18;
+  player.attackType = type;
+
+  if (type === 4) { // Heavy
+    player.attackTimer = ATTACKS.heavy.startup + ATTACKS.heavy.active + 5;
+    player.comboCount = 0;
+  } else {
+    player.comboCount = Math.min(player.comboCount + 1, 3);
+    player.comboTimer = COMBO_WINDOW;
+    const atk = type === 1 ? ATTACKS.jab : type === 2 ? ATTACKS.cross : ATTACKS.spinKick;
+    player.attackTimer = atk.startup + atk.active + 4;
+  }
 
   updateComboUI();
 
+  // Floating text
   const comboEl = document.getElementById('combo-display');
-  if (player.comboCount === 3) {
+  if (player.comboCount === 3 && type === 3) {
     comboEl.textContent = '3-HIT COMBO!';
     comboEl.style.opacity = 1;
-    setTimeout(() => { comboEl.style.opacity = 0; }, 800);
-  } else if (player.comboCount === 5) {
-    comboEl.textContent = '5-HIT COMBO!';
+    setTimeout(() => comboEl.style.opacity = 0, 900);
+  } else if (type === 4) {
+    comboEl.textContent = 'HEAVY FIST!';
     comboEl.style.opacity = 1;
-    setTimeout(() => { comboEl.style.opacity = 0; }, 800);
-  } else if (player.comboCount >= 7) {
-    comboEl.textContent = '7-HIT SPECIAL!!!';
-    comboEl.style.opacity = 1;
-    player.comboCount = 7;
-    setTimeout(() => { comboEl.style.opacity = 0; }, 900);
+    setTimeout(() => comboEl.style.opacity = 0, 700);
   }
 }
 
-function getComboMultiplier() {
-  // Multiplier grows with combo count
-  if (player.comboCount >= 7) return 2.5;
-  if (player.comboCount >= 5) return 1.8;
-  if (player.comboCount >= 3) return 1.4;
-  if (player.comboCount >= 2) return 1.15;
-  return 1.0;
-}
-
-function getAttackDamage() {
-  let base = 15;
-  if (player.weapon === 'gun') base = 36;
-  else if (player.weapon === 'heavy') base = 46;
-
-  // Apply combo multiplier
-  const dmg = Math.round(base * getComboMultiplier());
-  return dmg;
-}
-
-function getSoulReward(base) {
-  // Higher combos give more souls
+function getCurrentAttackDamage() {
+  let base = 8;
+  if (player.attackType === 1) base = ATTACKS.jab.damage;
+  else if (player.attackType === 2) base = ATTACKS.cross.damage;
+  else if (player.attackType === 3) base = ATTACKS.spinKick.damage;
+  else if (player.attackType === 4) base = ATTACKS.heavy.damage;
   return Math.round(base * getComboMultiplier());
 }
 
-// ---------- 5 LEVELS ----------
-const levels = [
-  {
-    name: 'Level 1 – Shadow Gate',
-    width: 2200,
-    platforms: [
-      {x:0, y:420, w:2200, h:40},
-      {x:300, y:340, w:160, h:20},
-      {x:550, y:280, w:140, h:20},
-      {x:850, y:340, w:180, h:20},
-      {x:1200, y:300, w:200, h:20},
-      {x:1550, y:250, w:160, h:20},
-      {x:1850, y:340, w:200, h:20}
-    ],
-    enemies: [
-      {x:400, y:380, type:'skel'},
-      {x:700, y:380, type:'skel'},
-      {x:1000, y:380, type:'skel'},
-      {x:1400, y:380, type:'beast'},
-      {x:1700, y:380, type:'skel'}
-    ],
-    exitX: 2050
-  },
-  {
-    name: 'Level 2 – Bone Corridor',
-    width: 2400,
-    platforms: [
-      {x:0, y:420, w:2400, h:40},
-      {x:200, y:350, w:120, h:20},
-      {x:450, y:290, w:150, h:20},
-      {x:750, y:350, w:100, h:20},
-      {x:1000, y:280, w:180, h:20},
-      {x:1300, y:340, w:140, h:20},
-      {x:1600, y:260, w:160, h:20},
-      {x:1950, y:320, w:200, h:20}
-    ],
-    enemies: [
-      {x:350, y:380, type:'skel'},
-      {x:600, y:380, type:'beast'},
-      {x:900, y:380, type:'skel'},
-      {x:1200, y:380, type:'skel'},
-      {x:1500, y:380, type:'beast'},
-      {x:1800, y:380, type:'skel'}
-    ],
-    exitX: 2250
-  },
-  {
-    name: 'Level 3 – Blood Altar',
-    width: 2000,
-    platforms: [
-      {x:0, y:420, w:2000, h:40},
-      {x:250, y:340, w:180, h:20},
-      {x:550, y:270, w:160, h:20},
-      {x:900, y:340, w:200, h:20},
-      {x:1300, y:280, w:180, h:20},
-      {x:1650, y:350, w:150, h:20}
-    ],
-    enemies: [
-      {x:400, y:380, type:'beast'},
-      {x:700, y:380, type:'skel'},
-      {x:1100, y:380, type:'beast'},
-      {x:1450, y:380, type:'skel'},
-      {x:1750, y:380, type:'beast'}
-    ],
-    exitX: 1850
-  },
-  {
-    name: 'BOSS – Wraith Lord',
-    width: 1100,
-    platforms: [
-      {x:0, y:420, w:1100, h:40},
-      {x:150, y:320, w:120, h:18},
-      {x:450, y:280, w:140, h:18},
-      {x:780, y:320, w:120, h:18}
-    ],
-    enemies: [],
-    isBoss: true,
-    boss: { name:'Wraith Lord', hp:320, x:700, y:360, w:50, h:60 },
-    exitX: 1000
-  },
-  {
-    name: 'Level 5 – Throne of Night',
-    width: 2600,
-    platforms: [
-      {x:0, y:420, w:2600, h:40},
-      {x:200, y:350, w:140, h:20},
-      {x:500, y:290, w:160, h:20},
-      {x:850, y:340, w:130, h:20},
-      {x:1150, y:260, w:180, h:20},
-      {x:1500, y:320, w:150, h:20},
-      {x:1850, y:250, w:170, h:20},
-      {x:2200, y:330, w:200, h:20}
-    ],
-    enemies: [
-      {x:400, y:380, type:'beast'},
-      {x:700, y:380, type:'skel'},
-      {x:1000, y:380, type:'beast'},
-      {x:1300, y:380, type:'skel'},
-      {x:1600, y:380, type:'beast'},
-      {x:2000, y:380, type:'skel'}
-    ],
-    isBoss: true,
-    boss: { name:'Shadow Emperor', hp:520, x:2300, y:350, w:60, h:70 },
-    exitX: 2500
-  }
+// ---------- LEVEL 1 LAYOUT ----------
+const LEVEL_WIDTH = 2000;
+const platforms = [
+  { x: 0, y: 430, w: 2000, h: 50 },          // main ground
+  { x: 420, y: 360, w: 120, h: 18 },
+  { x: 620, y: 310, w: 100, h: 18 },
+  { x: 980, y: 370, w: 140, h: 18 },
+  { x: 1250, y: 320, w: 110, h: 18 },
+  { x: 1550, y: 360, w: 130, h: 18 },
+  { x: 1780, y: 390, w: 160, h: 20 }         // exit platform
 ];
 
-let platforms = [];
+const exitGate = { x: 1860, y: 320, w: 50, h: 70 };
+
+// ---------- ENEMIES (Void Leeches) ----------
 let enemies = [];
-let boss = null;
 let particles = [];
-let projectiles = [];
+let spawnPlan = [];
+
+function createLeech(x, y) {
+  return {
+    x, y, w: 28, h: 22,
+    hp: 28, maxHp: 28,
+    speed: 1.15 + Math.random() * 0.3,
+    facing: -1,
+    state: 'crawl',      // crawl | lunge | hurt | dead
+    lungeTimer: 0,
+    hurtTimer: 0,
+    dead: false
+  };
+}
+
+function setupLevel1() {
+  enemies = [];
+  particles = [];
+  kills = 0;
+  souls = 0;
+  levelComplete = false;
+  cameraX = 0;
+
+  player.x = 100;
+  player.y = 350;
+  player.vx = 0;
+  player.vy = 0;
+  player.hp = 100;
+  player.jumpsLeft = 2;
+  player.comboCount = 0;
+  player.attacking = false;
+  player.invuln = 0;
+
+  // Zone spawns
+  // Zone 1
+  enemies.push(createLeech(380, 400));
+  enemies.push(createLeech(460, 400));
+
+  // Zone 2
+  enemies.push(createLeech(700, 400));
+  enemies.push(createLeech(780, 280));
+  enemies.push(createLeech(860, 400));
+
+  // Zone 3
+  enemies.push(createLeech(1100, 400));
+  enemies.push(createLeech(1180, 400));
+  enemies.push(createLeech(1300, 290));
+  enemies.push(createLeech(1380, 400));
+
+  // Zone 4 final wave
+  enemies.push(createLeech(1600, 400));
+  enemies.push(createLeech(1680, 400));
+  enemies.push(createLeech(1750, 400));
+  enemies.push(createLeech(1620, 330));
+  enemies.push(createLeech(1700, 330));
+
+  document.getElementById('hp').textContent = 100;
+  document.getElementById('kills').textContent = 0;
+  document.getElementById('souls').textContent = 0;
+  updateComboUI();
+}
+
+// ---------- PARTICLES ----------
+function spawnParticles(x, y, color, n = 8, type = 'hit') {
+  for (let i = 0; i < n; i++) {
+    let vx, vy, size, life, gravity = 0;
+    if (type === 'hit') {
+      vx = (Math.random() - 0.5) * 9;
+      vy = (Math.random() - 0.5) * 9;
+      size = 2.5 + Math.random() * 3.5;
+      life = 12 + Math.random() * 10;
+    } else if (type === 'death') {
+      vx = (Math.random() - 0.5) * 11;
+      vy = (Math.random() - 0.7) * 9;
+      size = 3.5 + Math.random() * 4;
+      life = 18 + Math.random() * 14;
+      gravity = 0.18;
+    } else if (type === 'slash') {
+      vx = (Math.random() - 0.5) * 5 + player.facing * 5;
+      vy = (Math.random() - 0.5) * 4;
+      size = 2 + Math.random() * 2.5;
+      life = 8 + Math.random() * 7;
+    } else {
+      vx = (Math.random() - 0.5) * 6;
+      vy = (Math.random() - 0.5) * 6;
+      size = 2.5 + Math.random() * 3;
+      life = 12 + Math.random() * 10;
+    }
+    particles.push({ x, y, vx, vy, life, maxLife: life, color, size, gravity });
+  }
+}
 
 // ---------- INPUT ----------
 const keys = {};
-let joyDX = 0, joyDY = 0, joyActive = false;
+let joyDX = 0, joyActive = false;
 
 window.addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
-  if (['z', 'j'].includes(e.key.toLowerCase())) tryAttack();
-  if (['x', 'k'].includes(e.key.toLowerCase())) trySpecial();
+  if (['z', 'j', 'k'].includes(e.key.toLowerCase())) tryAttack();
+  if (e.key.toLowerCase() === 'x') tryHeavy();
 });
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
@@ -261,19 +256,18 @@ function setupJoystick() {
     let dx = t.clientX - cx;
     let dy = t.clientY - cy;
     const max = 32;
-    const d = Math.sqrt(dx*dx + dy*dy) || 1;
-    if (d > max) { dx = dx/d*max; dy = dy/d*max; }
+    const d = Math.sqrt(dx * dx + dy * dy) || 1;
+    if (d > max) { dx = dx / d * max; dy = dy / d * max; }
     joyDX = dx / max;
-    joyDY = dy / max;
     knob.style.transform = `translate(${dx}px,${dy}px)`;
   }
   function end() {
     joyActive = false;
-    joyDX = joyDY = 0;
+    joyDX = 0;
     knob.style.transform = 'translate(0,0)';
   }
-  area.addEventListener('touchstart', start, {passive:false});
-  area.addEventListener('touchmove', move, {passive:false});
+  area.addEventListener('touchstart', start, { passive: false });
+  area.addEventListener('touchmove', move, { passive: false });
   area.addEventListener('touchend', end);
   area.addEventListener('mousedown', start);
   window.addEventListener('mousemove', move);
@@ -282,38 +276,30 @@ function setupJoystick() {
 
 function tryAttack() {
   if (player.attackTimer > 6) return;
-  registerAttack();
-}
-function trySpecial() {
-  if (player.weapon === 'gun') {
-    projectiles.push({
-      x: player.facing > 0 ? player.x + player.w : player.x - 10,
-      y: player.y + 18,
-      vx: player.facing * 12,
-      life: 55,
-      dmg: 42
-    });
-  } else {
-    player.comboCount = Math.max(player.comboCount, 5);
-    registerAttack();
-    player.attackTimer = 26;
-  }
-}
-function tryJump() {
-  // Can jump if we still have jumps left
-  if (player.jumpsLeft <= 0) return;
 
+  // Determine next step in combo
+  let type = 1; // Jab
+  if (player.comboCount === 1 && player.comboTimer > 0) type = 2; // Cross
+  else if (player.comboCount === 2 && player.comboTimer > 0) type = 3; // Spin Kick
+
+  registerAttack(type);
+}
+
+function tryHeavy() {
+  if (player.attackTimer > 4) return;
+  registerAttack(4);
+}
+
+function tryJump() {
+  if (player.jumpsLeft <= 0) return;
   if (player.onGround) {
-    // First jump from ground
     player.vy = player.jumpForce;
-    player.jumpsLeft = 1;          // leave 1 for the air jump
-    spawnWeaponParticles(player.x + player.w/2, player.y + player.h, 'jump', 6);
+    player.jumpsLeft = 1;
+    spawnParticles(player.x + player.w / 2, player.y + player.h, '#8888aa', 5, 'hit');
   } else {
-    // Double jump in air
     player.vy = player.doubleJumpForce;
-    player.jumpsLeft = 0;          // no more jumps
-    spawnWeaponParticles(player.x + player.w/2, player.y + player.h, 'jump', 8);
-    spawnWeaponParticles(player.x + player.w/2, player.y + player.h/2, 'combo', 5);
+    player.jumpsLeft = 0;
+    spawnParticles(player.x + player.w / 2, player.y + player.h, '#a070ff', 7, 'slash');
   }
   player.onGround = false;
 }
@@ -322,118 +308,14 @@ document.getElementById('attack-btn').addEventListener('touchstart', e => { e.pr
 document.getElementById('attack-btn').addEventListener('mousedown', tryAttack);
 document.getElementById('jump-btn').addEventListener('touchstart', e => { e.preventDefault(); tryJump(); });
 document.getElementById('jump-btn').addEventListener('mousedown', tryJump);
-document.getElementById('special-btn').addEventListener('touchstart', e => { e.preventDefault(); trySpecial(); });
-document.getElementById('special-btn').addEventListener('mousedown', trySpecial);
-
-// ---------- LEVEL LOAD ----------
-function loadLevel(idx) {
-  currentLevel = idx;
-  const lvl = levels[idx];
-  document.getElementById('level-name').textContent = lvl.name;
-  platforms = lvl.platforms;
-  enemies = [];
-  boss = null;
-  projectiles = [];
-  particles = [];
-
-  player.x = 60;
-  player.y = 300;
-  player.vx = player.vy = 0;
-  player.jumpsLeft = 2;
-  player.hp = Math.min(player.hp + 20, player.maxHp);
-  cameraX = 0;
-
-  lvl.enemies.forEach(e => {
-    enemies.push({
-      x: e.x, y: e.y, w: 26, h: 32,
-      hp: e.type === 'beast' ? 48 : 28,
-      type: e.type,
-      speed: e.type === 'beast' ? 1.7 : 1.25,
-      facing: -1,
-      dead: false
-    });
-  });
-
-  if (lvl.isBoss && lvl.boss) {
-    boss = {
-      ...lvl.boss,
-      maxHp: lvl.boss.hp,
-      facing: -1,
-      attackTimer: 0
-    };
-  }
-
-  if (idx >= 2) player.weapon = 'gun';
-  if (idx >= 4) player.weapon = 'heavy';
-  document.getElementById('weapon').textContent =
-    player.weapon === 'sword' ? 'Sword' :
-    player.weapon === 'gun' ? 'Shadow Gun' : 'Heavy Cleaver';
-}
-
-// Weapon-themed colors (will also support heroes later)
-function getWeaponColors() {
-  switch (player.weapon) {
-    case 'gun':
-      return { hit:'#66ccff', slash:'#aaddff', death:'#3399ff', combo:'#88eeff', jump:'#5577aa', special:'#00ccff' };
-    case 'heavy':
-      return { hit:'#ff8844', slash:'#ffaa66', death:'#cc4400', combo:'#ffcc44', jump:'#885533', special:'#ff6622' };
-    default: // sword
-      return { hit:'#c9a0ff', slash:'#e0d0ff', death:'#a070ff', combo:'#ffcc66', jump:'#8888aa', special:'#ff66ff' };
-  }
-}
-
-function spawnWeaponParticles(x, y, type, n) {
-  const colors = getWeaponColors();
-  const color = colors[type] || colors.hit;
-  const count = n || (type === 'death' ? 16 : type === 'combo' ? 10 : 7);
-  spawnParticles(x, y, color, count, type);
-}
-
-function spawnParticles(x, y, color, n=8, type='normal') {
-  for (let i = 0; i < n; i++) {
-    let vx, vy, size, life, gravity = 0;
-
-    if (type === 'hit') {
-      vx = (Math.random() - 0.5) * 10;
-      vy = (Math.random() - 0.5) * 10;
-      size = 3 + Math.random() * 4;
-      life = 12 + Math.random() * 12;
-    } else if (type === 'death') {
-      vx = (Math.random() - 0.5) * 12;
-      vy = (Math.random() - 0.8) * 10;
-      size = 4 + Math.random() * 5;
-      life = 20 + Math.random() * 18;
-      gravity = 0.15;
-    } else if (type === 'jump') {
-      vx = (Math.random() - 0.5) * 4;
-      vy = Math.random() * 2 + 1;
-      size = 2 + Math.random() * 3;
-      life = 10 + Math.random() * 8;
-    } else if (type === 'combo') {
-      vx = (Math.random() - 0.5) * 8;
-      vy = (Math.random() - 0.5) * 8 - 2;
-      size = 3 + Math.random() * 5;
-      life = 16 + Math.random() * 14;
-    } else if (type === 'slash') {
-      vx = (Math.random() - 0.5) * 6 + (player.facing * 4);
-      vy = (Math.random() - 0.5) * 5;
-      size = 2 + Math.random() * 3;
-      life = 8 + Math.random() * 8;
-    } else {
-      vx = (Math.random() - 0.5) * 7;
-      vy = (Math.random() - 0.5) * 7;
-      size = 3 + Math.random() * 3;
-      life = 15 + Math.random() * 12;
-    }
-
-    particles.push({ x, y, vx, vy, life, maxLife: life, color, size, gravity });
-  }
-}
+document.getElementById('special-btn').addEventListener('touchstart', e => { e.preventDefault(); tryHeavy(); });
+document.getElementById('special-btn').addEventListener('mousedown', tryHeavy);
 
 // ---------- UPDATE ----------
 function update() {
-  if (!gameRunning) return;
+  if (!gameRunning || levelComplete) return;
 
+  // Movement
   let move = 0;
   if (keys['a'] || keys['arrowleft']) move = -1;
   if (keys['d'] || keys['arrowright']) move = 1;
@@ -443,10 +325,10 @@ function update() {
     player.vx = move * player.speed;
     player.facing = move > 0 ? 1 : -1;
   } else {
-    player.vx *= 0.75;
+    player.vx *= 0.78;
   }
 
-  // Keyboard jump (edge-triggered so holding doesn't spam)
+  // Jump (keyboard)
   if (keys['w'] || keys['arrowup'] || keys[' ']) {
     if (!player._jumpHeld) {
       tryJump();
@@ -456,6 +338,7 @@ function update() {
     player._jumpHeld = false;
   }
 
+  // Gravity
   player.vy += 0.55;
   if (player.vy > 14) player.vy = 14;
 
@@ -471,20 +354,25 @@ function update() {
       player.y = p.y - player.h;
       player.vy = 0;
       player.onGround = true;
-      player.jumpsLeft = 2;   // fully restore jumps on landing
+      player.jumpsLeft = 2;
     }
   }
 
-  const lvlW = levels[currentLevel].width;
+  // Bounds
   if (player.x < 0) player.x = 0;
-  if (player.x > lvlW - player.w) player.x = lvlW - player.w;
-  if (player.y > canvas.height + 60) {
-    player.hp -= 25;
-    player.x = 80; player.y = 200; player.vy = 0;
+  if (player.x > LEVEL_WIDTH - player.w) player.x = LEVEL_WIDTH - player.w;
+  if (player.y > canvas.height + 80) {
+    player.hp -= 20;
+    player.x = 120;
+    player.y = 300;
+    player.vy = 0;
     if (player.hp <= 0) return gameOver();
   }
 
+  // Timers
   if (player.attackTimer > 0) player.attackTimer--;
+  else player.attacking = false;
+
   if (player.comboTimer > 0) {
     player.comboTimer--;
     if (player.comboTimer <= 0) {
@@ -494,19 +382,32 @@ function update() {
   }
   if (player.invuln > 0) player.invuln--;
 
+  // Camera
   cameraX = player.x - canvas.width * 0.35;
   if (cameraX < 0) cameraX = 0;
-  if (cameraX > lvlW - canvas.width) cameraX = Math.max(0, lvlW - canvas.width);
+  if (cameraX > LEVEL_WIDTH - canvas.width) cameraX = Math.max(0, LEVEL_WIDTH - canvas.width);
 
-  // Enemies
-  for (let i = enemies.length-1; i >= 0; i--) {
+  // ----- Enemies -----
+  for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
     if (e.dead) continue;
 
+    // AI
     const dx = player.x - e.x;
     e.facing = dx > 0 ? 1 : -1;
-    e.x += e.facing * e.speed;
 
+    if (e.hurtTimer > 0) {
+      e.hurtTimer--;
+    } else {
+      e.x += e.facing * e.speed;
+
+      // Simple lunge
+      if (Math.abs(dx) < 70 && Math.random() < 0.008) {
+        e.x += e.facing * 18;
+      }
+    }
+
+    // Gravity for leeches
     e.y += 5;
     for (const p of platforms) {
       if (e.x + e.w > p.x && e.x < p.x + p.w &&
@@ -515,99 +416,50 @@ function update() {
       }
     }
 
-    if (player.attacking && player.attackTimer > 8) {
-      const sx = player.facing > 0 ? player.x + player.w - 5 : player.x - 42;
-      if (sx < e.x + e.w && sx + 48 > e.x &&
+    // Player attack hit
+    if (player.attacking && player.attackTimer > 4) {
+      const atk = player.attackType === 1 ? ATTACKS.jab :
+                  player.attackType === 2 ? ATTACKS.cross :
+                  player.attackType === 3 ? ATTACKS.spinKick : ATTACKS.heavy;
+      const sx = player.facing > 0 ? player.x + player.w - 8 : player.x - atk.range + 8;
+      const sw = atk.range;
+
+      if (sx < e.x + e.w && sx + sw > e.x &&
           player.y < e.y + e.h && player.y + player.h > e.y) {
-        e.hp -= getAttackDamage();
-        spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'hit', 6);
-        spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'slash', 4);
+        const dmg = getCurrentAttackDamage();
+        e.hp -= dmg;
+        e.hurtTimer = 12;
+        e.x += player.facing * atk.knockback * 3;
+
+        spawnParticles(e.x + e.w / 2, e.y + e.h / 2, '#c9a0ff', 6, 'hit');
+        spawnParticles(e.x + e.w / 2, e.y + e.h / 2, '#e0d0ff', 4, 'slash');
+
         if (e.hp <= 0) {
           e.dead = true;
           kills++;
-          const baseSouls = e.type === 'beast' ? 9 : 4;
-          souls += getSoulReward(baseSouls);
-          spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'death', 16);
-          if (player.comboCount >= 5) {
-            spawnWeaponParticles(e.x + e.w/2, e.y + e.h/2, 'combo', 10);
-          }
+          const gain = 4 + (player.comboCount >= 3 ? 2 : 0);
+          souls += gain;
+          spawnParticles(e.x + e.w / 2, e.y + e.h / 2, '#a070ff', 14, 'death');
           document.getElementById('kills').textContent = kills;
           document.getElementById('souls').textContent = souls;
         }
       }
     }
 
+    // Touch damage
     if (player.invuln <= 0 &&
         player.x < e.x + e.w && player.x + player.w > e.x &&
         player.y < e.y + e.h && player.y + player.h > e.y) {
-      player.hp -= 10;
+      player.hp -= 9;
       player.invuln = 35;
-      spawnParticles(player.x + 14, player.y + 20, '#ff5555', 10, 'hit');
+      spawnParticles(player.x + 15, player.y + 22, '#ff5555', 8, 'hit');
       if (player.hp <= 0) return gameOver();
     }
   }
   enemies = enemies.filter(e => !e.dead);
 
-  // Boss
-  if (boss && boss.hp > 0) {
-    const dx = player.x - boss.x;
-    boss.facing = dx > 0 ? 1 : -1;
-    if (Math.abs(dx) > 90) boss.x += boss.facing * 1.9;
-    boss.attackTimer--;
-    if (boss.attackTimer <= 0 && Math.abs(dx) < 130) {
-      boss.attackTimer = 65;
-      boss.x += boss.facing * 45;
-    }
-
-    if (player.attacking && player.attackTimer > 8) {
-      const sx = player.facing > 0 ? player.x + player.w - 5 : player.x - 42;
-      if (sx < boss.x + boss.w && sx + 48 > boss.x &&
-          player.y < boss.y + boss.h && player.y + player.h > boss.y) {
-        boss.hp -= getAttackDamage();
-        spawnWeaponParticles(boss.x + boss.w/2, boss.y + 30, 'hit', 12);
-        spawnWeaponParticles(boss.x + boss.w/2, boss.y + 30, 'slash', 6);
-      }
-    }
-
-    if (player.invuln <= 0 &&
-        player.x < boss.x + boss.w && player.x + player.w > boss.x &&
-        player.y < boss.y + boss.h && player.y + player.h > boss.y) {
-      player.hp -= 15;
-      player.invuln = 40;
-      if (player.hp <= 0) return gameOver();
-    }
-
-    if (boss.hp <= 0) {
-      souls += getSoulReward(60);
-      kills += 1;
-      spawnWeaponParticles(boss.x + 25, boss.y + 30, 'death', 30);
-      spawnWeaponParticles(boss.x + 25, boss.y + 30, 'combo', 15);
-      document.getElementById('souls').textContent = souls;
-    }
-  }
-
-  // Projectiles
-  for (let i = projectiles.length-1; i >= 0; i--) {
-    const pr = projectiles[i];
-    pr.x += pr.vx;
-    pr.life--;
-    for (const e of enemies) {
-      if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
-        e.hp -= pr.dmg;
-        pr.life = 0;
-        spawnWeaponParticles(e.x, e.y, 'hit', 6);
-      }
-    }
-    if (boss && boss.hp > 0 &&
-        pr.x > boss.x && pr.x < boss.x + boss.w &&
-        pr.y > boss.y && pr.y < boss.y + boss.h) {
-      boss.hp -= pr.dmg;
-      pr.life = 0;
-    }
-    if (pr.life <= 0) projectiles.splice(i, 1);
-  }
-
-  for (let i = particles.length-1; i >= 0; i--) {
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx;
     p.y += p.vy;
@@ -616,22 +468,21 @@ function update() {
     if (p.life <= 0) particles.splice(i, 1);
   }
 
-  // Next level
-  if (player.x > levels[currentLevel].exitX) {
-    if (currentLevel < levels.length - 1) {
-      loadLevel(currentLevel + 1);
-    } else {
-      gameRunning = false;
-      const msg = document.getElementById('message');
-      msg.style.display = 'flex';
-      msg.innerHTML = `
-        <h1>Victory</h1>
-        <p>You conquered the Shadow Realm</p>
-        <p>Kills: ${kills} | Souls: ${souls}</p>
-        <button id="start-btn">Play Again</button>
-      `;
-      document.getElementById('start-btn').onclick = startGame;
-    }
+  // Exit check
+  if (player.x + player.w > exitGate.x && player.x < exitGate.x + exitGate.w &&
+      player.y + player.h > exitGate.y && player.y < exitGate.y + exitGate.h) {
+    levelComplete = true;
+    gameRunning = false;
+    const msg = document.getElementById('message');
+    msg.style.display = 'flex';
+    msg.innerHTML = `
+      <h1>Level 1 Complete</h1>
+      <p>Dust of Champions cleared</p>
+      <p>Kills: ${kills} | Souls: ${souls}</p>
+      <p style="margin-top:8px;color:#aaa;font-size:13px">The arena is collapsing… keep moving!</p>
+      <button id="start-btn">Play Again</button>
+    `;
+    document.getElementById('start-btn').onclick = startGame;
   }
 
   document.getElementById('hp').textContent = Math.max(0, Math.floor(player.hp));
@@ -639,15 +490,22 @@ function update() {
 
 // ---------- DRAW ----------
 function draw() {
-  ctx.fillStyle = '#0a0a12';
+  // Background
+  ctx.fillStyle = '#0a0a14';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Simple parallax
-  ctx.fillStyle = '#12121c';
-  for (let i = 0; i < 9; i++) {
-    const bx = ((i * 190) - cameraX * 0.25) % (canvas.width + 220) - 110;
-    ctx.fillRect(bx, 60 + (i%3)*50, 130, 200);
+  // Simple distant ruins + purple sky glow
+  ctx.fillStyle = '#12121f';
+  for (let i = 0; i < 7; i++) {
+    const bx = ((i * 220) - cameraX * 0.2) % (canvas.width + 250) - 120;
+    ctx.fillRect(bx, 40 + (i % 3) * 35, 140, 160);
   }
+
+  // Purple rift hint
+  ctx.fillStyle = 'rgba(120, 40, 180, 0.12)';
+  ctx.beginPath();
+  ctx.arc(canvas.width * 0.7, 60, 90, 0, Math.PI * 2);
+  ctx.fill();
 
   ctx.save();
   ctx.translate(-cameraX, 0);
@@ -656,64 +514,102 @@ function draw() {
   platforms.forEach(p => {
     ctx.fillStyle = '#1c1c2c';
     ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.fillStyle = '#2c2c40';
+    ctx.fillStyle = '#2a2a40';
     ctx.fillRect(p.x, p.y, p.w, 5);
+    // cracks
+    ctx.strokeStyle = 'rgba(140, 60, 200, 0.35)';
+    ctx.beginPath();
+    ctx.moveTo(p.x + 10, p.y + 2);
+    ctx.lineTo(p.x + p.w - 10, p.y + 2);
+    ctx.stroke();
   });
 
-  // Enemies
+  // Exit gate
+  ctx.fillStyle = '#2a1a4a';
+  ctx.fillRect(exitGate.x, exitGate.y, exitGate.w, exitGate.h);
+  ctx.fillStyle = 'rgba(160, 80, 255, 0.5)';
+  ctx.fillRect(exitGate.x + 8, exitGate.y + 10, 34, 50);
+  ctx.fillStyle = '#c9a0ff';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('EXIT', exitGate.x + 10, exitGate.y - 8);
+
+  // Enemies – Void Leeches
   enemies.forEach(e => {
-    ctx.fillStyle = e.type === 'beast' ? '#8b1a1a' : '#55557a';
-    ctx.fillRect(e.x, e.y, e.w, e.h);
-    ctx.fillStyle = '#ff6666';
-    ctx.fillRect(e.x + 5, e.y + 8, 5, 5);
-    ctx.fillRect(e.x + 15, e.y + 8, 5, 5);
+    // body
+    ctx.fillStyle = e.hurtTimer > 0 ? '#aa66cc' : '#4a2060';
+    ctx.beginPath();
+    ctx.ellipse(e.x + e.w / 2, e.y + e.h / 2, e.w / 2, e.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // eye
+    ctx.fillStyle = '#cc66ff';
+    ctx.beginPath();
+    ctx.arc(e.x + e.w / 2 + e.facing * 3, e.y + e.h / 2 - 2, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a0a20';
+    ctx.beginPath();
+    ctx.arc(e.x + e.w / 2 + e.facing * 3, e.y + e.h / 2 - 2, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    // tentacles
+    ctx.strokeStyle = '#6a3080';
+    ctx.lineWidth = 2;
+    for (let t = 0; t < 3; t++) {
+      ctx.beginPath();
+      ctx.moveTo(e.x + 6 + t * 7, e.y + e.h - 2);
+      ctx.quadraticCurveTo(e.x + 4 + t * 7, e.y + e.h + 8, e.x + 2 + t * 8, e.y + e.h + 12);
+      ctx.stroke();
+    }
   });
 
-  // Boss
-  if (boss && boss.hp > 0) {
-    ctx.fillStyle = '#4a0066';
-    ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
-    ctx.fillStyle = '#ff44aa';
-    ctx.fillRect(boss.x + 10, boss.y + 14, 10, 10);
-    ctx.fillRect(boss.x + 30, boss.y + 14, 10, 10);
-    // HP bar
-    ctx.fillStyle = '#222';
-    ctx.fillRect(boss.x - 15, boss.y - 20, boss.w + 30, 11);
-    ctx.fillStyle = '#cc2266';
-    ctx.fillRect(boss.x - 15, boss.y - 20, (boss.w + 30) * (boss.hp / boss.maxHp), 11);
+  // Player – Kael
+  ctx.save();
+  if (player.invuln > 0 && Math.floor(player.invuln / 3) % 2 === 0) ctx.globalAlpha = 0.4;
+
+  // body
+  ctx.fillStyle = '#2a2a35';
+  ctx.fillRect(player.x + 4, player.y + 14, 22, 30); // torso
+  // head
+  ctx.fillStyle = '#d4a88c';
+  ctx.fillRect(player.x + 7, player.y, 16, 16);
+  // hair
+  ctx.fillStyle = '#1a1a22';
+  ctx.fillRect(player.x + 5, player.y - 4, 20, 10);
+  // eyes
+  ctx.fillStyle = '#c070ff';
+  ctx.fillRect(player.x + 9, player.y + 6, 4, 3);
+  ctx.fillRect(player.x + 17, player.y + 6, 4, 3);
+  // arms / energy
+  ctx.fillStyle = '#c9a0ff';
+  if (player.facing > 0) {
+    ctx.fillRect(player.x + 24, player.y + 18, 8, 6);
+  } else {
+    ctx.fillRect(player.x - 2, player.y + 18, 8, 6);
   }
 
-  // Player
-  ctx.save();
-  if (player.invuln > 0 && Math.floor(player.invuln/3) % 2 === 0) ctx.globalAlpha = 0.4;
-  ctx.fillStyle = '#9b6dff';
-  ctx.fillRect(player.x, player.y, player.w, player.h);
-  ctx.fillStyle = '#c9a0ff';
-  ctx.fillRect(player.x + 5, player.y - 10, 18, 14);
-
-  if (player.attacking && player.attackTimer > 6) {
-    ctx.fillStyle = player.comboCount >= 7 ? '#ff66ff' :
-                    player.comboCount >= 5 ? '#aaaaff' : '#e0d0ff';
+  // Attack visuals
+  if (player.attacking && player.attackTimer > 3) {
+    ctx.fillStyle = player.attackType === 3 ? '#ff66ff' :
+                    player.attackType === 4 ? '#ffaa44' : '#e0d0ff';
     const sx = player.facing > 0 ? player.x + player.w : player.x - 42;
-    const sh = player.comboCount >= 5 ? 16 : 10;
-    ctx.fillRect(sx, player.y + 12, 44, sh);
+    const sh = player.attackType >= 3 ? 18 : 10;
+    ctx.fillRect(sx, player.y + 14, 44, sh);
+    // energy arc for spin kick
+    if (player.attackType === 3) {
+      ctx.strokeStyle = 'rgba(200, 120, 255, 0.6)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(player.x + player.w / 2, player.y + 22, 40, 0, Math.PI * 1.2);
+      ctx.stroke();
+    }
   }
   ctx.restore();
 
-  // Projectiles
-  projectiles.forEach(pr => {
-    ctx.fillStyle = '#88ccff';
-    ctx.fillRect(pr.x, pr.y, 13, 5);
-  });
-
   // Particles
   particles.forEach(p => {
-    const alpha = Math.max(0, p.life / (p.maxLife || 25));
+    const alpha = Math.max(0, p.life / (p.maxLife || 20));
     ctx.globalAlpha = alpha;
     ctx.fillStyle = p.color;
-    const s = p.size || 4;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, s * alpha, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, (p.size || 3) * alpha, 0, Math.PI * 2);
     ctx.fill();
   });
   ctx.globalAlpha = 1;
@@ -730,15 +626,7 @@ function loop() {
 function startGame() {
   document.getElementById('message').style.display = 'none';
   gameRunning = true;
-  kills = 0;
-  souls = 0;
-  player.hp = 100;
-  player.weapon = 'sword';
-  player.comboCount = 0;
-  document.getElementById('kills').textContent = 0;
-  document.getElementById('souls').textContent = 0;
-  updateComboUI();
-  loadLevel(0);
+  setupLevel1();
 }
 
 function gameOver() {
@@ -747,7 +635,7 @@ function gameOver() {
   msg.style.display = 'flex';
   msg.innerHTML = `
     <h1>You Fell</h1>
-    <p>Reached: ${levels[currentLevel].name}</p>
+    <p>Level 1 – Dust of Champions</p>
     <p>Kills: ${kills} | Souls: ${souls}</p>
     <button id="start-btn">Try Again</button>
   `;
